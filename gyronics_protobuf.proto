@@ -22,13 +22,20 @@ message Envelope {
   int64 sent_at_unix_ms = 2;
 
   oneof payload {
+    // Handshake
     Hello hello = 10;
     HelloAck hello_ack = 11;
 
-    Request request = 20;
-    Response response = 21;
+    // RPC plane (unary req/rep)
+    RpcRequest rpc_req = 20;
+    RpcResponse rpc_resp = 21;
 
-    StreamEvent event = 30;
+    // Stream control plane (subscribe/unsubscribe)
+    StreamRequest stream_req = 30;
+    StreamResponse stream_resp = 31;
+
+    // Data plane (streaming)
+    StreamEvent stream_event = 40;
   }
 }
 
@@ -59,90 +66,8 @@ message HelloAck {
 }
 
 // ============================================================================
-// Control Plane — Requests
+// Errors (shared)
 // ============================================================================
-
-message Request {
-  // Client-chosen ID for correlating responses.
-  // Must be unique among in-flight requests on this connection.
-  uint64 id = 1;
-
-  oneof target {
-    SystemRequest system = 10;
-    SensorRequest sensor = 11;
-    ConfigRequest config = 12;
-  }
-}
-
-// --------------------
-// System Requests
-// --------------------
-
-message SystemRequest {
-  oneof command {
-    Ping ping = 1;
-    GetBattery get_battery = 2;
-    GetDeviceInfo get_device_info = 3;
-  }
-
-  message Ping {
-    uint64 nonce = 1;
-  }
-
-  message GetBattery {}
-
-  message GetDeviceInfo {}
-}
-
-// --------------------
-// Sensor Requests
-// --------------------
-
-message SensorRequest {
-  oneof command {
-    Subscribe subscribe = 1;
-    Unsubscribe unsubscribe = 2;
-  }
-
-  message Subscribe {
-    SensorType type = 1;
-  }
-
-  message Unsubscribe {
-    uint64 stream_id = 1;
-  }
-}
-
-// --------------------
-// Config Requests
-// --------------------
-
-message ConfigRequest {
-  oneof command {
-    UseBLE use_ble = 1;
-  }
-
-  message UseBLE {
-    bool enabled = 1;
-  }
-}
-
-// ============================================================================
-// Control Plane — Responses
-// ============================================================================
-
-message Response {
-  // Matches Request.id
-  uint64 request_id = 1;
-
-  oneof body {
-    Error error = 2;
-
-    SystemResponse system = 10;
-    SensorResponse sensor = 11;
-    ConfigResponse config = 12;
-  }
-}
 
 message Error {
   enum Code {
@@ -151,31 +76,77 @@ message Error {
     INVALID_ARGUMENT = 1;
     NOT_FOUND = 2;
     UNSUPPORTED = 3;
+    NOT_READY = 4;
 
     INTERNAL = 10;
     TIMEOUT = 11;
-    NOT_READY = 13;
   }
 
   Code code = 1;
   string message = 2;
+
+  // Optional structured details (debugging, diagnostics).
   map<string, string> details = 3;
 }
 
+// ============================================================================
+// RPC Plane — Unary Request/Response
+// ============================================================================
+
+message RpcRequest {
+  // SDK-generated ID for correlating responses.
+  // Must be unique among in-flight requests on this connection.
+  uint64 id = 1;
+
+  oneof target {
+    DeviceRpcRequest device = 10;
+    AiRpcRequest ai = 11;
+  }
+}
+
+message RpcResponse {
+  // Matches RpcRequest.id
+  uint64 request_id = 1;
+
+  oneof body {
+    Error error = 2;
+
+    DeviceRpcResponse device = 10;
+    AiRpcResponse ai = 11;
+  }
+}
+
 // --------------------
-// System Responses
+// Device RPC
 // --------------------
 
-message SystemResponse {
+message DeviceRpcRequest {
+  oneof command {
+    Ping ping = 1;
+    GetBattery get_battery = 2;
+    GetDeviceInfo get_device_info = 3;
+    UseBLE use_ble = 4;
+  }
+
+  message Ping { uint64 nonce = 1; }
+  message GetBattery {}
+  message GetDeviceInfo {}
+
+  message UseBLE {
+    bool enabled = 1;
+  }
+}
+
+message DeviceRpcResponse {
   oneof result {
     Pong pong = 1;
     BatteryStatus battery = 2;
     DeviceInfo device_info = 3;
+    BLESet ble_set = 4;
   }
 
-  message Pong {
-    uint64 nonce = 1;
-  }
+  message Pong { uint64 nonce = 1; }
+  message BLESet {}
 }
 
 message BatteryStatus {
@@ -190,19 +161,85 @@ message DeviceInfo {
 }
 
 // --------------------
-// Sensor Responses
+// AI RPC
 // --------------------
 
-message SensorResponse {
+message AiRpcRequest {
+  oneof command {
+    ChangeModel change_model = 1;
+    GetActiveModel get_active_model = 2;
+  }
+
+  // Switch the server's active AI model.
+  // model_id is interpreted by the server (config / registry).
+  message ChangeModel {
+    string model_id = 1;
+  }
+
+  message GetActiveModel {}
+}
+
+message AiRpcResponse {
   oneof result {
-    SubscribeResult subscribe = 1;
-    UnsubscribeResult unsubscribe = 2;
+    ChangeModelResult change_model = 1;
+    ActiveModel active_model = 2;
+  }
+}
+
+message ChangeModelResult {
+  string model_id = 1;
+  bool applied = 2;
+}
+
+message ActiveModel {
+  string model_id = 1;
+}
+
+// ============================================================================
+// Stream Control Plane — Subscribe/Unsubscribe
+// ============================================================================
+
+message StreamRequest {
+  // SDK-generated correlation ID for this stream-control request.
+  uint64 id = 1;
+
+  oneof command {
+    Subscribe subscribe = 10;
+    Unsubscribe unsubscribe = 11;
+  }
+
+  message Subscribe {
+    oneof source {
+      DeviceStream device = 1;
+      AiStream ai = 2;
+    }
+  }
+
+  message Unsubscribe {
+    uint64 stream_id = 1;
+  }
+}
+
+message StreamResponse {
+  // Matches StreamRequest.id
+  uint64 request_id = 1;
+
+  oneof body {
+    Error error = 2;
+
+    SubscribeResult subscribe = 10;
+    UnsubscribeResult unsubscribe = 11;
   }
 }
 
 message SubscribeResult {
   uint64 stream_id = 1;
-  SensorType type = 2;
+
+  // Echo what was subscribed.
+  oneof source {
+    SensorType sensor_type = 2;
+    AiType ai_type = 3;
+  }
 }
 
 message UnsubscribeResult {
@@ -210,29 +247,47 @@ message UnsubscribeResult {
 }
 
 // --------------------
-// Config Responses
+// Device Streams
 // --------------------
 
-message ConfigResponse {
-  oneof result {
-    BLESet ble_set = 1;
-  }
-
-  message BLESet {}
+message DeviceStream {
+  SensorType type = 1;
 }
-
-// ============================================================================
-// Data Plane — Streaming
-// ============================================================================
 
 enum SensorType {
   SENSOR_TYPE_UNSPECIFIED = 0;
-  SENSOR_TYPE_IMU_RAW = 1;           // Uses ImuSample with roll, pitch, yaw set to 0
-  SENSOR_TYPE_IMU_ORIENTATION = 2;   // Uses ImuSample with acc, gyr and mag set to 0
-  SENSOR_TYPE_IMU_ALL = 3;           // All fields valid
-  SENSOR_TYPE_AI_PROCESSED_IMU  = 4; // Derived IMU stream from AI pipeline; same ImuSample layout
-  SENSOR_TYPE_AI_GESTURE = 5;
+
+  // Uses ImuSample with roll/pitch/yaw set to 0.
+  SENSOR_TYPE_IMU_RAW = 1;
+
+  // Uses ImuSample with acc/gyr/mag set to 0.
+  SENSOR_TYPE_IMU_ORIENTATION = 2;
+
+  // All fields valid (subject to has_mag).
+  SENSOR_TYPE_IMU_ALL = 3;
 }
+
+// --------------------
+// AI Streams
+// --------------------
+
+message AiStream {
+  AiType type = 1;
+}
+
+enum AiType {
+  AI_TYPE_UNSPECIFIED = 0;
+
+  // Derived IMU stream from AI pipeline; uses ImuSample layout.
+  AI_TYPE_PROCESSED_IMU = 1;
+
+  // Gesture classification stream; uses GestureUpdate.
+  AI_TYPE_GESTURE = 2;
+}
+
+// ============================================================================
+// Data Plane — Streaming Events
+// ============================================================================
 
 message StreamEvent {
   // Identifies the subscription instance.
@@ -251,19 +306,21 @@ message StreamEvent {
   }
 }
 
-message Vector3 {
-  float x = 1;
-  float y = 2;
-  float z = 3;
-}
-
+// IMU / Orientation sample layout (also used for AI-processed IMU).
 message ImuSample {
   Vector3 acc = 1;
   Vector3 gyr = 2;
   Vector3 mag = 3; // May be unavailable. See DeviceInfo.has_mag
+
   float roll = 4;
   float pitch = 5;
   float yaw = 6;
+}
+
+message Vector3 {
+  float x = 1;
+  float y = 2;
+  float z = 3;
 }
 
 message GestureUpdate {
