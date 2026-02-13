@@ -36,6 +36,9 @@ message Envelope {
 
     // Data plane (streaming)
     StreamEvent stream_event = 40;
+
+    // Error
+    Error protocol_error = 50;
   }
 }
 
@@ -174,6 +177,7 @@ message AiRpcRequest {
   // model_id is interpreted by the server (config / registry).
   message ChangeModel {
     string model_id = 1;
+    uint32 ai_engine_version = 2;
   }
 
   message GetActiveModel {}
@@ -189,10 +193,12 @@ message AiRpcResponse {
 message ChangeModelResult {
   string model_id = 1;
   bool applied = 2;
+  uint32 ai_engine_version = 3;
 }
 
 message ActiveModel {
   string model_id = 1;
+  uint32 ai_engine_version = 2;
 }
 
 // ============================================================================
