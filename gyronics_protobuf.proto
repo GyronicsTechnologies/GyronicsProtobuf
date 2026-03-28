@@ -171,6 +171,8 @@ message AiRpcRequest {
   oneof command {
     ChangeModel change_model = 1;
     GetActiveModel get_active_model = 2;
+    ListEngines list_engines = 3;
+    ListModelsForEngine list_models_for_engine = 4;
   }
 
   // Switch the server's active AI model.
@@ -181,12 +183,29 @@ message AiRpcRequest {
   }
 
   message GetActiveModel {}
+
+  message ListEngines {}
+
+  message ListModelsForEngine {
+    uint32 engine_version = 1;
+  }
 }
 
 message AiRpcResponse {
   oneof result {
     ChangeModelResult change_model = 1;
     ActiveModel active_model = 2;
+    EngineList engines = 3;
+    ModelList models = 4;
+  }
+
+  message EngineList {
+    repeated uint32 engine_versions = 1;
+  }
+
+  message ModelList {
+    repeated string model_ids = 1;
+    uint32 engine_version = 2;
   }
 }
 
