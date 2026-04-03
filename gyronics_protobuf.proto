@@ -1,0 +1,356 @@
+syntax = "proto3";
+
+package gyronics;
+
+// ============================================================================
+// Transport Envelope
+// ============================================================================
+// Framing (outside protobuf):
+// [uint32_be length][Envelope bytes]
+//
+// Contract:
+// - First message on every connection MUST be Hello
+// - Server responds with HelloAck
+// - All other messages are invalid before handshake completes
+message Envelope {
+  // Monotonic per-connection sequence number.
+  // Debugging / tracing only.
+  uint64 sequence_number = 1;
+
+  // Absolute wall-clock send time (Unix epoch, ms).
+  // Logging / observability only.
+  int64 sent_at_unix_ms = 2;
+
+  oneof payload {
+    // Handshake
+    Hello hello = 10;
+    HelloAck hello_ack = 11;
+
+    // RPC plane (unary req/rep)
+    RpcRequest rpc_req = 20;
+    RpcResponse rpc_resp = 21;
+
+    // Stream control plane (subscribe/unsubscribe)
+    StreamRequest stream_req = 30;
+    StreamResponse stream_resp = 31;
+
+    // Data plane (streaming)
+    StreamEvent stream_event = 40;
+
+    // Error
+    Error protocol_error = 50;
+  }
+}
+
+// ============================================================================
+// Handshake
+// ============================================================================
+
+message Hello {
+  // Major protocol version expected by the client.
+  uint32 schema_version = 1;
+
+  // Identifies the external application (label only).
+  // Recommended: reverse-DNS (e.g. "com.example.myapp").
+  // Used for Logging / Observability.
+  string app_id = 2;
+}
+
+message HelloAck {
+  // Protocol version selected by the server.
+  uint32 schema_version = 1;
+
+  // Server implementation version (informational).
+  string server_version = 2;
+
+  // Device metadata as known to the server from config.
+  // Not necessarily a live probe of a currently connected device.
+  DeviceInfo device_info = 3;
+}
+
+// ============================================================================
+// Errors (shared)
+// ============================================================================
+
+message Error {
+  enum Code {
+    CODE_UNSPECIFIED = 0;
+
+    INVALID_ARGUMENT = 1;
+    NOT_FOUND = 2;
+    UNSUPPORTED = 3;
+    NOT_READY = 4;
+
+    INTERNAL = 10;
+    TIMEOUT = 11;
+  }
+
+  Code code = 1;
+  string message = 2;
+
+  // Optional structured details (debugging, diagnostics).
+  map<string, string> details = 3;
+}
+
+// ============================================================================
+// RPC Plane — Unary Request/Response
+// ============================================================================
+
+message RpcRequest {
+  // SDK-generated ID for correlating responses.
+  // Must be unique among in-flight requests on this connection.
+  uint64 id = 1;
+
+  oneof target {
+    DeviceRpcRequest device = 10;
+    AiRpcRequest ai = 11;
+  }
+}
+
+message RpcResponse {
+  // Matches RpcRequest.id
+  uint64 request_id = 1;
+
+  oneof body {
+    Error error = 2;
+
+    DeviceRpcResponse device = 10;
+    AiRpcResponse ai = 11;
+  }
+}
+
+// --------------------
+// Device RPC
+// --------------------
+
+message DeviceRpcRequest {
+  oneof command {
+    Ping ping = 1;
+    GetBattery get_battery = 2;
+    GetDeviceInfo get_device_info = 3;
+    UseBLE use_ble = 4;
+  }
+
+  message Ping { uint64 nonce = 1; }
+  message GetBattery {}
+  message GetDeviceInfo {}
+
+  message UseBLE {
+    bool enabled = 1;
+  }
+}
+
+message DeviceRpcResponse {
+  oneof result {
+    Pong pong = 1;
+    BatteryStatus battery = 2;
+    DeviceInfo device_info = 3;
+    BLESet ble_set = 4;
+  }
+
+  message Pong { uint64 nonce = 1; }
+  message BLESet {}
+}
+
+message BatteryStatus {
+  uint32 percentage = 1; // 0–100
+  bool is_charging = 2;
+}
+
+message DeviceInfo {
+  string device_name = 1;
+  string firmware_version = 2;
+  bool has_mag = 3;
+}
+
+// --------------------
+// AI RPC
+// --------------------
+
+message AiRpcRequest {
+  oneof command {
+    ChangeModel change_model = 1;
+    GetActiveModel get_active_model = 2;
+    ListEngines list_engines = 3;
+    ListModelsForEngine list_models_for_engine = 4;
+  }
+
+  // Switch the server's active AI model.
+  // model_id is interpreted by the server (config / registry).
+  message ChangeModel {
+    string model_id = 1;
+    uint32 ai_engine_version = 2;
+  }
+
+  message GetActiveModel {}
+
+  message ListEngines {}
+
+  message ListModelsForEngine {
+    uint32 engine_version = 1;
+  }
+}
+
+message AiRpcResponse {
+  oneof result {
+    ChangeModelResult change_model = 1;
+    ActiveModel active_model = 2;
+    EngineList engines = 3;
+    ModelList models = 4;
+  }
+
+  message EngineList {
+    repeated uint32 engine_versions = 1;
+  }
+
+  message ModelList {
+    repeated string model_ids = 1;
+    uint32 engine_version = 2;
+  }
+}
+
+message ChangeModelResult {
+  string model_id = 1;
+  bool applied = 2;
+  uint32 ai_engine_version = 3;
+}
+
+message ActiveModel {
+  string model_id = 1;
+  uint32 ai_engine_version = 2;
+}
+
+// ============================================================================
+// Stream Control Plane — Subscribe/Unsubscribe
+// ============================================================================
+
+message StreamRequest {
+  // SDK-generated correlation ID for this stream-control request.
+  uint64 id = 1;
+
+  oneof command {
+    Subscribe subscribe = 10;
+    Unsubscribe unsubscribe = 11;
+  }
+
+  message Subscribe {
+    oneof source {
+      DeviceStream device = 1;
+      AiStream ai = 2;
+    }
+  }
+
+  message Unsubscribe {
+    uint64 stream_id = 1;
+  }
+}
+
+message StreamResponse {
+  // Matches StreamRequest.id
+  uint64 request_id = 1;
+
+  oneof body {
+    Error error = 2;
+
+    SubscribeResult subscribe = 10;
+    UnsubscribeResult unsubscribe = 11;
+  }
+}
+
+message SubscribeResult {
+  uint64 stream_id = 1;
+
+  // Echo what was subscribed.
+  oneof source {
+    SensorType sensor_type = 2;
+    AiType ai_type = 3;
+  }
+}
+
+message UnsubscribeResult {
+  uint64 stream_id = 1;
+}
+
+// --------------------
+// Device Streams
+// --------------------
+
+message DeviceStream {
+  SensorType type = 1;
+}
+
+enum SensorType {
+  SENSOR_TYPE_UNSPECIFIED = 0;
+
+  // Uses ImuSample with roll/pitch/yaw set to 0.
+  SENSOR_TYPE_IMU_RAW = 1;
+
+  // Uses ImuSample with acc/gyr/mag set to 0.
+  SENSOR_TYPE_IMU_ORIENTATION = 2;
+
+  // All fields valid (subject to has_mag).
+  SENSOR_TYPE_IMU_ALL = 3;
+}
+
+// --------------------
+// AI Streams
+// --------------------
+
+message AiStream {
+  AiType type = 1;
+}
+
+enum AiType {
+  AI_TYPE_UNSPECIFIED = 0;
+
+  // Derived IMU stream from AI pipeline; uses ImuSample layout.
+  AI_TYPE_PROCESSED_IMU = 1;
+
+  // Gesture classification stream; uses GestureUpdate.
+  AI_TYPE_GESTURE = 2;
+}
+
+// ============================================================================
+// Data Plane — Streaming Events
+// ============================================================================
+
+message StreamEvent {
+  // Identifies the subscription instance.
+  uint64 stream_id = 1;
+
+  // Monotonic timestamp relative to device/server start.
+  // Use for ordering, alignment, latency.
+  uint64 uptime_us = 2;
+
+  // Per-stream sequence number (detect drops).
+  uint32 seq = 3;
+
+  oneof data {
+    ImuSample imu = 10;
+    ImuSample processed_imu = 11;
+    GestureUpdate gesture = 12;
+  }
+}
+
+// IMU / Orientation sample layout (also used for AI-processed IMU).
+message ImuSample {
+  Vector3 acc = 1;
+  Vector3 gyr = 2;
+  Vector3 mag = 3; // May be unavailable. See DeviceInfo.has_mag
+
+  float roll = 4;
+  float pitch = 5;
+  float yaw = 6;
+}
+
+message Vector3 {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+message GestureUpdate {
+  string name = 1;
+  float confidence = 2;
+}
+
