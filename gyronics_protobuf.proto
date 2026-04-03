@@ -327,7 +327,8 @@ message StreamEvent {
 
   oneof data {
     ImuSample imu = 10;
-    GestureUpdate gesture = 11;
+    ImuSample processed_imu = 11;
+    GestureUpdate gesture = 12;
   }
 }
 
